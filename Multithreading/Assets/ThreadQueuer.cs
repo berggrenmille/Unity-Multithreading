@@ -2,8 +2,11 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.Security.Permissions;
-using System.Threading;
 using UnityEngine;
+#if !UNITY_WEBGL
+using System.Threading;
+#endif
+
 
 public class ThreadQueuer : Singleton<ThreadQueuer>
 {
@@ -17,17 +20,20 @@ public class ThreadQueuer : Singleton<ThreadQueuer>
 #endif
     private readonly object threadLocker = new object();
 
-    public int maxThreads = 8;
+    public int numThreads = 8;
     [SerializeField] private int activeThreads = 0;
-    public int actionsRunning = 0;
-    public int waitingCoActions = 0;
+    [SerializeField] private int waitingCoActions = 0;
 
     public void QueueActionOnMainThread(Action actionToRun)
     {
+#if !UNITY_WEBGL
         lock (mainThreadActionQueue)
         {
             mainThreadActionQueue.Enqueue(actionToRun);
         }
+#else
+        mainThreadActionQueue.Enqueue(actionToRun);
+#endif
     }
 
     public void QueueActionOnCoThread(Action actionToRun)
@@ -38,10 +44,7 @@ public class ThreadQueuer : Singleton<ThreadQueuer>
             coThreadActionQueue.Enqueue(actionToRun);
         }
 #else
-        lock (mainThreadActionQueue)
-        {
-            QueueActionOnMainThread(actionToRun)
-        }
+        QueueActionOnMainThread(actionToRun)
 #endif
     }
 
@@ -53,6 +56,8 @@ public class ThreadQueuer : Singleton<ThreadQueuer>
 
     private void Update()
     {
+#if !UNITY_WEBGL
+        waitingCoActions = coThreadActionQueue.Count;
         if (coThreadActionQueue.Count != 0)
         {
             TriggerAvailableThreads();
@@ -64,7 +69,14 @@ public class ThreadQueuer : Singleton<ThreadQueuer>
                 mainThreadActionQueue.Dequeue()();
             }
         }
-        waitingCoActions = coThreadActionQueue.Count;
+
+#else
+        while (mainThreadActionQueue.Count > 0)
+            {
+                mainThreadActionQueue.Dequeue()();
+            }
+#endif
+
     }
 
     private void OnDisable()
@@ -74,56 +86,51 @@ public class ThreadQueuer : Singleton<ThreadQueuer>
 
     public void InitThreads()
     {
-                                                             //Initiate threads for supported platforms
+        //Initiate threads for supported platforms
 #if !UNITY_WEBGL
-        threads = new Thread[maxThreads];                    //create thread array
-        threadsActionData = new ThreadActionData[maxThreads];//create the ActionData array, for all threads
-        for (int index = 0; index < maxThreads; index++)
+        threads = new Thread[numThreads];                    //create thread array
+        threadsActionData = new ThreadActionData[numThreads];//create the ActionData array, for all threads
+        for (int index = 0; index < numThreads; index++)
         {
             threads[index] = new Thread(ThreadLoop);         //Create a new thread
             threads[index].Start(index);                     //Start the thread, and assign it its index
         }
-        TriggerAvailableThreads();                    
+        TriggerAvailableThreads();
 #else                                                        //Using platform that does not support threads
-            ThreadCount=0;                                  
+            numThreads = 0;                                  
 #endif
     }
     /*
      * NOTE: CloseThreads() closes all co-threads permanently
      */
-    public void CloseThreads()                               
+    public void CloseThreads()
     {
+#if !UNITY_WEBGL
         for (int i = 0; i < threads.Length; i++)
         {
             threadsActionData[i].closeThread = true;
         }
+        TriggerAvailableThreads();
+#endif
     }
 
-    /*
-     * Note: 
-     * TriggerAvailableThreads triggers all threads to empty the current queue
-     */
+    /// <summary>
+    /// This function triggers all threads to empty the current queue.
+    /// </summary>
     public void TriggerAvailableThreads()
     {
-        if (maxThreads > 0)
+#if !UNITY_WEBGL
+        lock (threadLocker)
         {
-            lock (threadLocker)
-            {
-                Monitor.PulseAll(threadLocker);
-            }
+            Monitor.PulseAll(threadLocker);
         }
-        else
-        {
-            lock (coThreadActionQueue)
-            {
-                while (coThreadActionQueue.Count > 0)
-                {
-                    coThreadActionQueue.Dequeue()();
-                }
-            }
-        }
-    }
+#endif
 
+    }
+    /// <summary>
+    /// This function is the heart of the thread, it keeps it alive until told to shutdown.
+    /// </summary>
+    /// <param name="_index"></param>
     private void ThreadLoop(object _index)
     {
         int index = (int)_index;
@@ -137,15 +144,16 @@ public class ThreadQueuer : Singleton<ThreadQueuer>
                 {
                     while (coThreadActionQueue.Count == 0)
                     {
+
                         Monitor.Wait(threadLocker); //Wait for master to tell threads to start working
+
                         if (threadsActionData[index].closeThread)
                             return;
+                        break;
                     }
 
                     threadsActionData[index].taskToRun = GetNewCoAction(); //Assign new task
-
                     threadsActionData[index].isRunningTask = true;
-                    actionsRunning++;
                 }
 
                 //Run action
@@ -157,13 +165,13 @@ public class ThreadQueuer : Singleton<ThreadQueuer>
                 //Finish
                 lock (threadLocker)
                 {
-                    actionsRunning--;
                     threadsActionData[index].isRunningTask = false;
-                }
-                if (threadsActionData[index].closeThread)
-                {
-                    activeThreads--;
-                    return;
+                    //Check if thread should close
+                    if (threadsActionData[index].closeThread)
+                    {
+                        activeThreads--;
+                        return;
+                    }
                 }
             }
             catch (Exception e)
@@ -172,7 +180,10 @@ public class ThreadQueuer : Singleton<ThreadQueuer>
             }
         }
     }
-
+    /// <summary>
+    /// This function returns an available action from the coThreadActionQueue
+    /// </summary>
+    /// <returns></returns>
     public Action GetNewCoAction()
     {
         if (coThreadActionQueue.Count != 0)
@@ -180,12 +191,16 @@ public class ThreadQueuer : Singleton<ThreadQueuer>
         else
             return null;
     }
-    
+
+    /// <summary>
+    ///  This is keeps valuable information for each thread.
+    /// </summary>
     [Serializable]
     public class ThreadActionData
     {
         public Action taskToRun;
         public bool isRunningTask = false;
+        public bool isWaiting = false;
         public bool closeThread = false;
 
     }
