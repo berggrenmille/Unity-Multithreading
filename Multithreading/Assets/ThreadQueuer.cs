@@ -125,6 +125,13 @@ public class ThreadQueuer : Singleton<ThreadQueuer>
             Monitor.PulseAll(threadLocker);
         }
 #endif
+        if (numThreads == 0)
+        {
+            while (coThreadActionQueue.Count > 0)
+            {
+                QueueActionOnMainThread(coThreadActionQueue.Dequeue());
+            }
+        }
 
     }
     /// <summary>
