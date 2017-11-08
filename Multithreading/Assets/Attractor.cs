@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Threading;
 using UnityEngine;
 
 public class Attractor : MonoBehaviour
@@ -9,15 +10,18 @@ public class Attractor : MonoBehaviour
     private static List<Attractor> attractors = new List<Attractor>();
     static object lockObj = new object();
     public float mass;
+    
+    public Vector3 transPos = Vector3.zero;
+    int currAttr = 0;
     public Rigidbody rb;
     // Use this for initialization
     void Start()
     {
         
         rb = GetComponent<Rigidbody>();
-        
+        transPos = transform.position;
         mass = rb.mass;
-        lock (lockObj)
+        lock (attractors)
         {
             attractors.Add(this);
         }
@@ -28,26 +32,44 @@ public class Attractor : MonoBehaviour
     // Update is called once per frame
     void Update()
     {
-        
+        lock (lockObj)
+        {
+            transPos = transform.position;
+
+        }
+
     }
 
     void FixedUpdate()
     {
-        ThreadQueuer.Instance.QueueActionOnMainThread(Attract);
+
+        ThreadQueuer.Instance.QueueActionOnCoThread(Attract);
     }
 
     void Attract()
     {
-        if (attractors.Count > 1)
-        {
-            foreach (var attractor in attractors)
+
+        lock (attractors)
+        { 
+            if (attractors.Count > 1)
             {
-                if (attractor != this && attractor.transform.position!= transform.position)
+                for (int i = 0; i < attractors.Count; i++)
                 {
-                    Vector3 dir = attractor.transform.position - transform.position;
-                    float distance = dir.sqrMagnitude;
-                    float force = G * (mass * attractor.mass) / distance;
-                    rb.AddForce(dir.normalized*force);
+                    if (attractors[i].transPos != transPos)
+                    {
+ 
+                           
+                        float force = G * (mass * attractors[i].mass);
+                        Vector3 dir = attractors[i].transPos - transPos;
+                        float distance = dir.sqrMagnitude;
+                        force /= distance;
+                        Action forceA = () =>
+                            {
+                                rb.AddForce(dir.normalized * force);
+                            };
+                            ThreadQueuer.Instance.QueueActionOnMainThread(forceA);
+                        
+                    }
                 }
             }
         }
