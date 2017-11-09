@@ -103,6 +103,7 @@ public class ThreadQueuer : Singleton<ThreadQueuer>
     /*
      * NOTE: CloseThreads() closes all co-threads permanently
      */
+
     public void CloseThreads()
     {
 #if !UNITY_WEBGL
